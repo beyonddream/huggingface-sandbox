@@ -120,10 +120,15 @@ class Sandbox:
         )
 
     def write_file(self, path: str, content: str):
-        self._http.post(f"{self.url}/write", json={"path": path, "content": content})
+        r = self._http.post(f"{self.url}/write", json={"path": path, "content": content})
+        r.raise_for_status()
 
     def read_file(self, path: str) -> str:
-        return self._http.post(f"{self.url}/read", json={"path": path}).json()["content"]
+        r = self._http.post(f"{self.url}/read", json={"path": path})
+        if r.status_code == 404:
+            raise FileNotFoundError(r.json().get("detail", path))
+        r.raise_for_status()
+        return r.json()["content"]
 
     def terminate(self):
         self._http.close()

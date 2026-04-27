@@ -43,7 +43,10 @@ def write(req: dict, _=Depends(auth)):
 
 @app.post("/read")
 def read(req: dict, _=Depends(auth)):
-    return {"content": Path(req["path"]).read_text()}
+    p = Path(req["path"])
+    if not p.exists():
+        raise HTTPException(404, f"file not found: {req['path']}")
+    return {"content": p.read_text()}
 
 
 @app.get("/health")
