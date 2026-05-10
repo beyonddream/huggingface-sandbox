@@ -1,4 +1,7 @@
-# hf-sandbox
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png">
+  <img alt="hf-sandbox" src="assets/banner-light.png">
+</picture>
 
 Modal-style sandbox API on top of Hugging Face Jobs.
 
