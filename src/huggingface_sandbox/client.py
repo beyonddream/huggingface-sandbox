@@ -68,7 +68,11 @@ def _register_public_dns_override(hostname: str, timeout: float = 120) -> None:
 
 _SERVER_SRC = (Path(__file__).parent / "server.py").read_text()
 _CLOUDFLARED_VERSION = '2026.3.0'
-_NGROK_ARCHIVE_URL = 'https://dl.equinox.io/ngrok/ngrok-v3/stable/archive'
+_NGROK_VERSION = '3.39.1'
+_NGROK_DOWNLOAD_URL = (
+  f'https://dl.equinox.io/ngrok/ngrok-v3/stable/archive/'
+  f'ngrok-v3-{_NGROK_VERSION}-linux-amd64.tar.gz'
+)
 _FASTAPI_VERSION = '0.115.0'
 _UVICORN_VERSION = '0.30.6'
 
@@ -87,7 +91,7 @@ chmod +x /tmp/cf
 exec /tmp/cf tunnel --url http://localhost:8000 --no-autoupdate 2>&1
 ''',
   'ngrok': _BOOTSTRAP_BASE + f'''
-python -c "import re, urllib.request; html = urllib.request.urlopen('{_NGROK_ARCHIVE_URL}').read().decode('utf-8', 'replace'); urls = re.findall(r'https://bin[.]equinox[.]io/a/[^\\\" ]+/ngrok-v3-[^\\\" ]+-linux-amd64[.]tar[.]gz', html); urllib.request.urlretrieve(urls[0], '/tmp/ngrok.tgz')"
+python -c "import urllib.request; urllib.request.urlretrieve('{_NGROK_DOWNLOAD_URL}', '/tmp/ngrok.tgz')"
 python -c "import tarfile; tarfile.open('/tmp/ngrok.tgz').extractall('/tmp')"
 /tmp/ngrok config add-authtoken "$NGROK_AUTHTOKEN" >/dev/null
 exec /tmp/ngrok http http://localhost:8000 --log stdout --log-format logfmt 2>&1
