@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hf-sandbox"
+name = "huggingface-sandbox"
 version = "0.1.1"
 description = "Modal-style sandbox API on top of Hugging Face Jobs."
 requires-python = ">=3.10"

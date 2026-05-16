@@ -2,6 +2,7 @@
 
 import atexit
 import base64
+import os
 import re
 import secrets
 import socket
@@ -39,7 +40,7 @@ def _telemetry(topic: str, data: dict) -> None:
     pass
 
 # Some local resolvers (e.g. systemd-resolved) return NXDOMAIN for fresh
-# trycloudflare.com subdomains even though public DNS resolves them fine.abs
+# tunnel subdomains even though public DNS resolves them fine.
 # We bypass the system resolver by looking up via 1.1.1.1 and overriding
 # socket.getaddrinfo for hosts we explicitly register.
 _HOST_OVERRIDES: dict[str, str] = {}
@@ -67,21 +68,39 @@ def _register_public_dns_override(hostname: str, timeout: float = 120) -> None:
 
 _SERVER_SRC = (Path(__file__).parent / "server.py").read_text()
 _CLOUDFLARED_VERSION = '2026.3.0'
+_NGROK_VERSION = '3.39.1'
+_NGROK_DOWNLOAD_URL = (
+  f'https://dl.equinox.io/ngrok/ngrok-v3/stable/archive/'
+  f'ngrok-v3-{_NGROK_VERSION}-linux-amd64.tar.gz'
+)
 _FASTAPI_VERSION = '0.115.0'
 _UVICORN_VERSION = '0.30.6'
 
-_BOOTSTRAP = f'''set -e
+_BOOTSTRAP_BASE = f'''set -e
 pip install -q fastapi=={_FASTAPI_VERSION} uvicorn=={_UVICORN_VERSION}
-python -c "import urllib.request; urllib.request.urlretrive('https://github.com/cloudfare/cloudflared/releases/download/{_CLOUDFLARED_VERSION}/cloudflared-linux-amd64', '/tmp/cf')"
-chmod +x /tmp/cf
 cat > /tmp/server.py << 'PYEOF'
 {_SERVER_SRC}
 PYEOF
 python -u /tmp/server.py &
-exec /tmp/cf tunnel --url http://localhost:8000 --no-autoupdate 2>&1
 '''
 
-_URL_RE = re.compile(r'https://[a-z0-9-]+\.trycloudflare\.com')
+_BOOTSTRAPS = {
+  'cloudflare': _BOOTSTRAP_BASE + f'''
+python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/cloudflare/cloudflared/releases/download/{_CLOUDFLARED_VERSION}/cloudflared-linux-amd64', '/tmp/cf')"
+chmod +x /tmp/cf
+exec /tmp/cf tunnel --url http://localhost:8000 --no-autoupdate 2>&1
+''',
+  'ngrok': _BOOTSTRAP_BASE + f'''
+python -c "import urllib.request; urllib.request.urlretrieve('{_NGROK_DOWNLOAD_URL}', '/tmp/ngrok.tgz')"
+python -c "import tarfile; tarfile.open('/tmp/ngrok.tgz').extractall('/tmp')"
+/tmp/ngrok config add-authtoken "$NGROK_AUTHTOKEN" >/dev/null
+exec /tmp/ngrok http http://localhost:8000 --log stdout --log-format logfmt 2>&1
+''',
+}
+
+_URL_RE = re.compile(
+  r'https://[a-zA-Z0-9.-]+\.(?:trycloudflare\.com|ngrok-free\.app|ngrok\.app|ngrok\.io)'
+)
 
 class Sandbox:
 
@@ -95,20 +114,29 @@ class Sandbox:
 
   @classmethod
   def create(cls, image: str, flavor: str = 'cpu-basic', timeout: str = '1h',
-    forward_hf_token: bool = False):
+    forward_hf_token: bool = False, tunnel: str = 'cloudflare',
+    ngrok_authtoken: str | None = None):
+    if tunnel not in _BOOTSTRAPS:
+      raise ValueError(f"unsupported tunnel {tunnel!r}; expected 'cloudflare' or 'ngrok'")
     token = secrets.token_urlsafe(32)
     job_secrets = {'HF_SANDBOX_TOKEN': token}
     if forward_hf_token:
       job_secrets['HF_TOKEN'] = get_token()
+    if tunnel == 'ngrok':
+      ngrok_authtoken = ngrok_authtoken or os.environ.get('NGROK_AUTHTOKEN')
+      if not ngrok_authtoken:
+        raise ValueError('ngrok tunnel requires ngrok_authtoken or NGROK_AUTHTOKEN')
+      job_secrets['NGROK_AUTHTOKEN'] = ngrok_authtoken
     job = run_job(
       image=image,
-      command=['bash', '-c', _BOOTSTRAP],
+      command=['bash', '-c', _BOOTSTRAPS[tunnel]],
       secrets=job_secrets,
       flavor=flavor,
       timeout=timeout,
     )
     url = cls._wait_for_url(job.id)
-    _register_public_dns_override(url.split('://', 1)[1].split('/', 1)[0])
+    hostname = url.split('://', 1)[1].split('/', 1)[0]
+    _register_public_dns_override(hostname)
     sb = cls(job.id, url, token)
     sb._wait_healthy()
     _active.add(sb)
@@ -118,7 +146,8 @@ class Sandbox:
         'session_id': sb._session_id,
         'flavor': flavor,
         'timeout': timeout,
-        'forward_hf_token': forward_hf_token
+        'forward_hf_token': forward_hf_token,
+        'tunnel': tunnel
       }
     )
     return sb
@@ -187,4 +216,3 @@ class Sandbox:
     self._http.close()
     cancel_job(job_id=self.job_id)
     _active.discard(self)
-  
